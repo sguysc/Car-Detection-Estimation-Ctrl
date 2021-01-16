@@ -113,7 +113,7 @@ class _RepeatSampler(object):
 
 
 class LoadImages:  # for inference
-    def __init__(self, path, img_size=640):
+    def __init__(self, path, img_size=640, start_at=-1, end_at=-1):
         p = str(Path(path))  # os-agnostic
         p = os.path.abspath(p)  # absolute path
         if '*' in p:
@@ -134,8 +134,9 @@ class LoadImages:  # for inference
         self.nf = ni + nv  # number of files
         self.video_flag = [False] * ni + [True] * nv
         self.mode = 'images'
+        self.start_at, self.end_at = start_at, end_at
         if any(videos):
-            self.new_video(videos[0])  # new video
+            self.new_video(videos[0], start_at=self.start_at, end_at=self.end_at)  # new video
         else:
             self.cap = None
         assert self.nf > 0, 'No images or videos found in %s. Supported formats are:\nimages: %s\nvideos: %s' % \
@@ -154,6 +155,8 @@ class LoadImages:  # for inference
             # Read video
             self.mode = 'video'
             ret_val, img0 = self.cap.read()
+            if(self.frame > self.end_at):
+                raise StopIteration
             if not ret_val:
                 self.count += 1
                 self.cap.release()
@@ -161,11 +164,11 @@ class LoadImages:  # for inference
                     raise StopIteration
                 else:
                     path = self.files[self.count]
-                    self.new_video(path)
+                    self.new_video(path, start_at=self.start_at, end_at=self.end_at)
                     ret_val, img0 = self.cap.read()
 
             self.frame += 1
-            print('video %g/%g (%g/%g) %s: ' % (self.count + 1, self.nf, self.frame, self.nframes, path), end='')
+            # print('video %g/%g (%g/%g) %s: ' % (self.count + 1, self.nf, self.frame, self.nframes, path), end='')
 
         else:
             # Read image
@@ -183,13 +186,29 @@ class LoadImages:  # for inference
 
         return path, img, img0, self.cap
 
-    def new_video(self, path):
+    def new_video(self, path, start_at=-1, end_at=-1):
         self.frame = 0
         self.cap = cv2.VideoCapture(path)
         self.nframes = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        if(start_at == -1 and end_at == -1):
+            self.end_at = self.nframes
+        elif(start_at==-1 and end_at != -1):
+            self.nframes = self.nframes - end_at
+        elif(start_at != -1 and end_at==-1):
+            self.end_at = self.nframes
+            self.nframes = self.nframes - start_at
+            self.StartAt(frame_number=start_at)
+        elif(start_at != -1 and end_at !=-1):
+            self.nframes = end_at - start_at
+            self.StartAt(frame_number=start_at)
 
     def __len__(self):
         return self.nf  # number of files
+    
+    def StartAt(self, frame_number=0):
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number);
+        self.frame = frame_number
 
 
 class LoadWebcam:  # for inference

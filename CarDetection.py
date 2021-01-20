@@ -44,7 +44,7 @@ from stonesoup.deleter.error import CovarianceBasedDeleter
 from stonesoup.tracker.simple import SingleTargetTracker, MultiTargetTracker
 from stonesoup.detector.base import Detector
 from stonesoup.buffered_generator import BufferedGenerator
-from stonesoup.types.detection import Detection
+from stonesoup.types.detection import Detection, Clutter
 from stonesoup.base import Property
 from stonesoup.feeder.filter import MetadataValueFilter
 from stonesoup.types.track import Track
@@ -148,7 +148,7 @@ def draw_detections(image, detections, show_class=False, show_score=False):
 
 # visualising tracks - all the objects boxes that are active for at least some time 
 # defined by the tracker
-def draw_tracks(image, tracks, show_history=True, show_class=True, show_score=True, null_hyp=False):
+def draw_tracks(image, tracks, t, show_history=True, show_class=True, show_score=True, null_hyp=False):
     draw = ImageDraw.Draw(image)
     for track in tracks:
         try:
@@ -186,7 +186,9 @@ def draw_tracks(image, tracks, show_history=True, show_class=True, show_score=Tr
             if(len(prob) > 1):
                 # then it has the null hypothesis in index 0, otherwise
                 # it only has the null hypothesis so don't "re-normalize"
-                prob = prob[1:]/prob[1:].sum()
+                # prob = prob[1:]/prob[1:].sum()
+                # after changing the spatial_ratio_factor, the null hypothesis is valid
+                prob = prob/prob.sum()
             # score = round(np.float(track.hypothesis.single_hypotheses[0].probability), 2)
             score = round(prob.max(), 2)
         
@@ -197,6 +199,10 @@ def draw_tracks(image, tracks, show_history=True, show_class=True, show_score=Tr
         elif show_score:
             draw.text((x0, y1 + 2), '{}'.format(score), fill=line_color)
 
+    # import pdb; pdb.set_trace()
+    text_x = image.size[0] / 2
+    text_y = 10
+    draw.text((text_x, text_y), 't=%d' %(t), fill=(128,128,128), font=fnt)
     return image
 
 # helper class that creates the detections. implements a Detector class.
@@ -228,15 +234,20 @@ class YOLOv5Detector(Detector):
         self.debug =  True #False
         self.yolo_detections = {}
         self.main_dir  = os.getcwd() +   '/'
-
+        # import pdb; pdb.set_trace()
         self.weights  = [*args][1] + 'yolov5s.pt'
         # self.source   = [*args][1] + 'KITTI/testing/images/2011_09_26_drive_0059_*.png'
-        self.source   = '/home/cornell/Tools/yolov5/KITTI/training/images/2011_09_26_drive_0059_*.png'
-        start_at, end_at= -1, -1
-        # self.source = './test1.mp4'
+        # self.source   = '/home/cornell/Tools/yolov5/KITTI/training/images/2011_09_26_drive_0057_*.png'
+        # self.source   = '/home/cornell/Tools/yolov5/KITTI/training/images/2011_09_26_drive_0059_*.png'
+        # start_at, end_at= -1, -1
+        self.source = './test1.mp4'
         # how many frames to take from the video
-        # start_at = 30*30 #54.5*60*30 
-        # end_at = 60*30 #55.5*60*30
+        start_at = 30*30 #54.5*60*30 
+        end_at = 60*30 #55.5*60*30
+        # start_at = 11*60*30 
+        # end_at = (11*60+30)*30 
+        # start_at = (46*60+20)*30 
+        # end_at = (46*60+50)*30 
         self.view_img = False
         self.save_txt = False 
         self.imgsz    = 640
@@ -383,14 +394,16 @@ class MultiObjectVideoTracker(object):
         # x_k, y_k move with constant velocity and white noise acceleration.
         # width and height of the bounding box is a random walk
         # x_k, y_k are the top-left corners of the bounding box
-        self.t_models = [ConstantVelocity(20**2), ConstantVelocity(20**2), \
-                         RandomWalk(20**2), RandomWalk(20**2)]
+        # self.t_models = [ConstantVelocity(20**2), ConstantVelocity(20**2), \
+        #                  RandomWalk(20**2), RandomWalk(20**2)]
+        self.t_models = [ConstantVelocity(5**2), ConstantVelocity(5**2), \
+                         RandomWalk(5**2), RandomWalk(5**2)]
         self.transition_model = CombinedLinearGaussianTransitionModel(self.t_models)
 
         # Measurement Model:  z_k = [x_k, y_k, w_k, h_k]
         # map to indices `[0,2,4,5]` of the 6-dimensional state 
         self.measurement_model = LinearGaussian(ndim_state=6, mapping=[0, 2, 4, 5],
-                                   noise_covar=np.diag([1**2, 1**2, 3**2, 3**2]))
+                                   noise_covar=np.diag([3**2, 3**2, 3**2, 3**2]))
         
         self.predictor = KalmanPredictor(self.transition_model)
         self.updater   = KalmanUpdater(self.measurement_model)
@@ -401,7 +414,10 @@ class MultiObjectVideoTracker(object):
         # that have not been associated to a measurement in the last 3 frames.
         # x0 = StateVector(np.zeros((6,1)))
         self.prior_state = GaussianState(
-                        StateVector(np.array([580., 0., 180., 0., 80., 80.]).reshape((6,1))),
+                        # StateVector(np.array([580., 0., 180., 0., 80., 80.]).reshape((6,1))),
+                        # StateVector(np.array([580., 0., 180., 0., 200., 180.]).reshape((6,1))),
+                        StateVector(np.array([300., 0., 200., 0., 40., 40.]).reshape((6,1))),
+                        # StateVector(np.array([300., 0., 200., 0., 100., 80.]).reshape((6,1))),
                         CovarianceMatrix(np.diag([20**2, 10**2, 20**2, 10**2, 10**2, 10**2])),
                         timestamp = datetime.datetime.now())
         
@@ -429,7 +445,9 @@ class MultiObjectVideoTracker(object):
             # for all prediction-detection pairs for a single prediction and multiple detections
             self.hypothesiser = PDAHypothesiser(predictor=self.predictor,
                                     updater=self.updater,
-                                    clutter_spatial_density=0.125,
+                                    clutter_spatial_density=1.0E-8,
+                                    # clutter_spatial_density=1.0E-7,
+                                    # clutter_spatial_density=0.125,
                                     prob_detect=0.9)
             # takes these hypotheses and returns a dictionary of key-value pairings of
             # each track and detection which it is to be associated with.
@@ -528,28 +546,30 @@ class MultiObjectVideoTracker(object):
             artists3 = []
             num_frames = self._yolo_detector.num_frames
             self.trk = Track([self.prior_state])
+            self.hyp_mean = []
+            self.hyp_cov = []
+            self.hyp_weight = []
+            self.miss_det = []
+            self.miss_det_mean = []
+            self.miss_det_cov = []
             
-            all_measurements = []
-            im_h, im_w = 1000, 1000
-            
-            idx = 1
+            all_measurements = []            
+            idx = 0
+            # import pdb; pdb.set_trace()
             for n, measurements in self.detector:
-                if not (idx) % 10:
-                    print("Frame: {}/{}".format(idx, num_frames))
+                if not (idx+1) % 10:
+                    print("Frame: {}/{}".format(idx+1, num_frames))
                 
-                # if(idx>20):
-                #     break
+                # if(idx == 211):
+                    # hypothesis changes abruptly
+                    # import pdb; pdb.set_trace()
+                    # break
                 
-                # store it for plotting
-                # measurement_set = set()
-                # for meas in measurements:
-                #     measurement_set.add(meas)
-                all_measurements.append(measurements)
-                
+                # import pdb; pdb.set_trace()
                 # do the actual PDA algorithm
                 hypotheses = self.data_associator.associate([self.trk],
                                                        measurements, n)
-            
+                
                 hypotheses = hypotheses[self.trk]
             
                 # Loop through each hypothesis, creating posterior states for each, and merge to calculate
@@ -559,36 +579,41 @@ class MultiObjectVideoTracker(object):
                 only_prediction = False
                 # import pdb; pdb.set_trace()
                 for hypothesis in hypotheses:
-                    # if not hypothesis:
+                    if not hypothesis:
                         # this is the null hypothesis that we don't have a true detection.
                         # it is commented out at the moment because it out-weighs any of
                         # the true detections for some reason. GUY: check what is wrong
                         # with the parameters of the prior/transition/.. such that it 
                         # gets so much likelihood
-                        # posterior_states.append(hypothesis.prediction)
-                        # posterior_state_weights.append(hypothesis.probability)
-                    # else:
-                    if(hypothesis):
+                        posterior_states.append(hypothesis.prediction)
+                        posterior_state_weights.append(hypothesis.probability)
+                        if(hypothesis.probability > 0.90):
+                            # too much probability it's a miss detection so the final
+                            # track will be mostly prediction
+                            only_prediction = True
+                    else:
+                    # if(hypothesis):
                         # these assume one of the measurement is correct:
                         posterior_state = self.updater.update(hypothesis)
                         posterior_states.append(posterior_state)
                         posterior_state_weights.append(hypothesis.probability)
             
-                try:
-                    means = StateVectors([state.state_vector for state in posterior_states])
-                    covars = np.stack([state.covar for state in posterior_states], axis=2)
-                    weights = np.asarray(posterior_state_weights)
-                except:
-                    # No detections at this frame, so only the null hypothesis is valid
+                means = StateVectors([state.state_vector for state in posterior_states])
+                covars = np.stack([state.covar for state in posterior_states], axis=2)
+                weights = np.asarray(posterior_state_weights)
+                # No detections at this frame, so only the null hypothesis is valid
+                if len(posterior_state_weights) == 1:
                     only_prediction = True
-                    for hypothesis in hypotheses:
-                        posterior_states.append(hypothesis.prediction)
-                        posterior_state_weights.append(hypothesis.probability)
-                    # print(f'stopped at frame {idx} due to error')
-                    # idx += 1
-                    # import pdb; pdb.set_trace()
-                    # continue
-            
+                    
+                # import pdb; pdb.set_trace()
+                max_ind = np.argmax(weights)
+                self.hyp_mean.append(means[:,max_ind])
+                self.hyp_cov.append(covars[:,:,max_ind])
+                self.hyp_weight.append(weights[max_ind])
+                self.miss_det.append( max_ind == 0 )
+                self.miss_det_mean.append(means[:,0])
+                self.miss_det_cov.append(covars[:,:,0])
+                
                 # Reduce mixture of states to one posterior estimate Gaussian.
                 post_mean, post_covar = gm_reduce_single(means, covars, weights)
             
@@ -609,23 +634,42 @@ class MultiObjectVideoTracker(object):
                 # Plot output
                 image = Image.fromarray(im_rgb)
                 image = draw_detections(image, det)
-                image = draw_tracks(image, [self.trk[-1]], null_hyp=only_prediction)
+                image = draw_tracks(image, [self.trk[-1]], idx, null_hyp=only_prediction)
                 ax3.axes.xaxis.set_visible(False)
                 ax3.axes.yaxis.set_visible(False)
                 fig3.tight_layout()
                 artist = ax3.imshow(image, animated=True)
                 artists3.append([artist])
+                
+                # store it for plotting
+                measurement_set = set()
+                postulated_detection = 1 # missed detection won't count
+                # how do you select specific item in a set?
+                for meas in measurements:
+                    if(postulated_detection == max_ind):
+                        measurement_set.add(meas)
+                    else:
+                        measurement_set.add(Clutter(meas.state_vector, timestamp=meas.timestamp,
+                                    measurement_model=meas.measurement_model))
+                    postulated_detection += 1
+                # for meas in measurements:
+                #     measurement_set.add(meas)
+                all_measurements.append(measurement_set)
 
                 idx += 1
-            print("Frame: {}/{}".format(num_frames, num_frames))
+            
+            if (num_frames) % 10:
+                print("Frame: {}/{}".format(num_frames, num_frames))
             im_size = im0s.shape
             self.plotter.ax.set_xlim(0, im_size[1])
             self.plotter.ax.set_ylim(0, im_size[0])
             
+            self.all_measurements = copy(all_measurements)
+            # return 1
             # Plot true detections and clutter.
-            self.plotter.plot_measurements(all_measurements, [0, 2])
+            self.plotter.plot_measurements(all_measurements, [0, 1]) # x,y
             # import pdb; pdb.set_trace()
-            self.plotter.plot_tracks(self.trk, [0, 2], uncertainty=True)
+            self.plotter.plot_tracks(self.trk, [0, 2], uncertainty=True) # x,y
             self.plotter.fig.tight_layout()
             self.plotter.fig
             # self.plotter.fig.show()
@@ -633,7 +677,7 @@ class MultiObjectVideoTracker(object):
             plt.pause(0.001)
             # plt.show()
             self.plotter.fig.savefig('tracker_output_PDA.png')
-            
+            print('saved the static plot tracker_output_PDA.png')
             ani3 = animation.ArtistAnimation(fig3, artists3, interval=33, \
                                       blit=True, repeat_delay=200)
             plt.pause(0.1)
@@ -644,9 +688,17 @@ class MultiObjectVideoTracker(object):
 if __name__ == '__main__':
     # fr = LoadVideoFromYouTube(30, 4*60, VIDEO_FILENAME='test1', \
                               # URL='https://www.youtube.com/watch?v=fkps18H3SXY')
-    
+    MOVT = None
     MOVT = MultiObjectVideoTracker(est_kind='PDA') #'multi')
     MOVT.run()
     print('done')
     # import pdb; pdb.set_trace()
     MOVT.plotter.fig
+    hyp_mean = MOVT.hyp_mean
+    hyp_cov  = MOVT.hyp_cov
+    hyp_weight = MOVT.hyp_weight
+    miss_det = MOVT.miss_det
+    miss_det_mean = MOVT.miss_det_mean 
+    miss_det_cov = MOVT.miss_det_cov
+    all_measurements = MOVT.all_measurements
+    trk = MOVT.trk
